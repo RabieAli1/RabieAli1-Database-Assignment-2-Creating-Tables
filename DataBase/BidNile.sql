@@ -224,3 +224,199 @@ CREATE TABLE Sales.AuctionFollow
     CONSTRAINT PK_AuctionFollow PRIMARY KEY (MemberId, AuctionId)
 );
 GO
+
+
+-- =============================================
+
+-- Task 3: ALTER (Business Changes)
+
+-- 3.1 Connect all tables with Foreign Keys
+-- (Deleting an item deletes its photos; all other FKs: NO ACTION)
+
+-- Schema: Users
+ALTER TABLE Users.City
+    ADD CONSTRAINT FK_City_Country
+    FOREIGN KEY (CountryCode) REFERENCES Users.Country (CountryCode)
+    ON DELETE NO ACTION;
+
+ALTER TABLE Users.Member
+    ADD CONSTRAINT FK_Member_City
+    FOREIGN KEY (CityId) REFERENCES Users.City(CityId)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_Member
+    FOREIGN KEY (ReferredByMemberId) REFERENCES Users.Member (MemberId)
+    ON DELETE NO ACTION;
+
+ALTER TABLE Users.Wallet
+    ADD CONSTRAINT FK_Wallet_Member
+    FOREIGN KEY (MemberId) REFERENCES Users.Member (MemberId)
+    ON DELETE NO ACTION;
+
+GO
+
+
+-- Schema: Operations 
+ALTER TABLE Operations.Warehouse
+    ADD CONSTRAINT FK_Warehouse_City
+    FOREIGN KEY (CityId) REFERENCES Users.City (CityId)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_Warehouse_Employee
+    FOREIGN KEY (ManagerId) REFERENCES Operations.Employee (MemberId)
+    ON DELETE NO ACTION;
+
+ALTER TABLE Operations.Employee
+    ADD CONSTRAINT FK_Employee_Member
+    FOREIGN KEY (MemberId) REFERENCES Users.Member (MemberId)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_Employee_Warehouse
+    FOREIGN KEY (WarehouseId) REFERENCES Operations.Warehouse (WarehouseId)
+    ON DELETE NO ACTION;
+GO
+
+-- Schema: Catalog
+ALTER TABLE Catalog.Category
+    ADD CONSTRAINT FK_Category_Category
+    FOREIGN KEY (ParentCategoryCode) REFERENCES Catalog.Category (CategoryCode)
+    ON DELETE NO ACTION;
+
+ALTER TABLE Catalog.Item
+    ADD CONSTRAINT FK_Item_Category
+    FOREIGN KEY (CategoryCode) REFERENCES Catalog.Category (CategoryCode)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_Item_Member
+    FOREIGN KEY (SellerId) REFERENCES Users.Member (MemberId)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_Item_Warehouse
+    FOREIGN KEY (WarehouseId) REFERENCES Operations.Warehouse (WarehouseId)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_Item_Employee
+    FOREIGN KEY (InspectorId) REFERENCES Operations.Employee (MemberId)
+    ON DELETE NO ACTION;
+
+ALTER TABLE Catalog.ItemPhoto
+    ADD CONSTRAINT FK_ItemPhoto_Item
+    FOREIGN KEY (ItemId) REFERENCES Catalog.Item (ItemId)
+    ON DELETE CASCADE;
+GO
+
+-- Schema: Sales
+ALTER TABLE Sales.Auction
+    ADD CONSTRAINT FK_Auction_Item
+    FOREIGN KEY (ItemId) REFERENCES Catalog.Item (ItemId)
+    ON DELETE NO ACTION;
+
+ALTER TABLE Sales.Bid
+    ADD CONSTRAINT FK_Bid_Auction
+    FOREIGN KEY (AuctionId) REFERENCES Sales.Auction (AuctionId)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_Bid_Member
+    FOREIGN KEY (MemberId) REFERENCES Users.Member (MemberId)
+    ON DELETE NO ACTION;
+
+ALTER TABLE Sales.AuctionFollow
+    ADD CONSTRAINT FK_AuctionFollow_Member
+    FOREIGN KEY (MemberId) REFERENCES Users.Member (MemberId)
+    ON DELETE NO ACTION,
+    CONSTRAINT FK_AuctionFollow_Auction
+    FOREIGN KEY (AuctionId) REFERENCES Sales.Auction (AuctionId)
+    ON DELETE NO ACTION;
+GO
+
+
+
+-- 3.2 Members choose an app language (ar or en), existing rows get 'ar' in one statement
+ALTER TABLE Users.Member
+    ADD AppLanguage CHAR(2) NOT NULL
+        CONSTRAINT DF_Member_AppLanguage DEFAULT 'ar'
+        CONSTRAINT CK_Member_AppLanguage CHECK (AppLanguage IN ('ar', 'en'));
+GO
+
+-- 3.3 Items can be featured (Yes/No, default No)
+ALTER TABLE Catalog.Item
+    ADD IsFeatured BIT NOT NULL
+        CONSTRAINT DF_Item_IsFeatured DEFAULT 0;
+GO
+
+-- 3.4 Naming review (SQL Server uses sp_rename, not ALTER TABLE)
+-- Drop CK_Warehouse_Capacity first because sp_rename fails on columns with dependencies
+EXEC sp_rename 'Sales.Bid.IpAddress', 'DeviceIp', 'COLUMN';
+GO
+
+ALTER TABLE Operations.Warehouse
+    DROP CONSTRAINT CK_Warehouse_Capacity;
+GO
+
+EXEC sp_rename 'Operations.Warehouse.Capacity', 'MaxItems', 'COLUMN';
+GO
+
+ALTER TABLE Operations.Warehouse
+    ADD CONSTRAINT CK_Warehouse_MaxItems CHECK (MaxItems > 0);
+GO
+
+-- 3.5 Extend FullName length to 150 while keeping NOT NULL
+ALTER TABLE Users.Member
+    ALTER COLUMN FullName NVARCHAR(150) NOT NULL;
+GO
+
+-- 3.6 Change MaxItems to SMALLINT (fits up to 32,767)
+-- Drop the dependent CHECK constraint first, alter the type, then re-add it
+ALTER TABLE Operations.Warehouse
+    DROP CONSTRAINT CK_Warehouse_MaxItems;
+GO
+
+ALTER TABLE Operations.Warehouse
+    ALTER COLUMN MaxItems SMALLINT NOT NULL;
+GO
+
+ALTER TABLE Operations.Warehouse
+    ADD CONSTRAINT CK_Warehouse_MaxItems CHECK (MaxItems > 0);
+GO
+
+-- 3.7 Lower maximum category commission from 30% to 25%
+ALTER TABLE Catalog.Category
+    DROP CONSTRAINT CK_Category_CommissionPct;
+GO
+
+ALTER TABLE Catalog.Category
+    ADD CONSTRAINT CK_Category_CommissionPct CHECK (CommissionPct BETWEEN 0 AND 25);
+GO
+
+-- 3.8 Add 'PendingReview' status and make it the new default for Auction.Status
+ALTER TABLE Sales.Auction
+    DROP CONSTRAINT CK_Auction_Status, DF_Auction_Status;
+GO
+
+ALTER TABLE Sales.Auction
+    ADD CONSTRAINT CK_Auction_Status CHECK (Status IN ('Draft', 'PendingReview', 'Live', 'Ended', 'Cancelled')),
+        CONSTRAINT DF_Auction_Status DEFAULT 'PendingReview' FOR Status;
+GO
+
+-- 3.9 Add optional BuyNowPrice (must be greater than StartingPrice)
+ALTER TABLE Sales.Auction
+    ADD BuyNowPrice DECIMAL(12, 2) NULL;
+GO
+
+ALTER TABLE Sales.Auction
+    ADD CONSTRAINT CK_Auction_BuyNowPrice CHECK (BuyNowPrice > StartingPrice);
+GO
+
+-- 3.10 Make Member.Mobile unique
+ALTER TABLE Users.Member
+    ADD CONSTRAINT UQ_Member_Mobile UNIQUE (Mobile);
+GO
+
+-- 3.11 Remove Member.IsVerified (must drop its DEFAULT constraint first)
+ALTER TABLE Users.Member
+    DROP CONSTRAINT DF_Member_IsVerified;
+GO
+
+ALTER TABLE Users.Member
+    DROP COLUMN IsVerified;
+GO
+
+-- 3.12 Create Marketing schema and move AuctionFollow into it
+CREATE SCHEMA Marketing;
+GO
+
+ALTER SCHEMA Marketing TRANSFER Sales.AuctionFollow;
+GO
